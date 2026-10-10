@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.database import Base, get_db
 from app.main import app
 from app.models.promo_code import PromoCode
@@ -68,7 +69,7 @@ def create_promo(
 
 
 def make_user_for_request(user):
-    """Copy the required user fields before the DB session closes."""
+    """Copy required user fields before the database session closes."""
     return SimpleNamespace(
         id=user.id,
         role=user.role,
@@ -177,5 +178,75 @@ def test_invalid_promo_is_rejected(
         )
 
         assert response.status_code == expected_status
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("role", [UserRole.RIDER, UserRole.DRIVER])
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        (
+            "post",
+            "/api/promo-codes",
+            {
+                "json": {
+                    "code": "NEW20",
+                    "discount_percent": 20,
+                    "max_uses": 5,
+                }
+            },
+        ),
+        (
+            "get",
+            "/api/promo-codes",
+            {},
+        ),
+        (
+            "patch",
+            "/api/promo-codes/1/status?is_active=false",
+            {},
+        ),
+    ],
+)
+def test_non_admin_cannot_manage_promo_codes(
+    promo_client,
+    monkeypatch,
+    role,
+    method,
+    path,
+    kwargs,
+):
+    # Configure an admin allowlist that excludes the test user.
+    monkeypatch.setattr(
+        settings,
+        "ADMIN_EMAILS",
+        "admin@example.com",
+    )
+
+    db = TestingSessionLocal()
+    try:
+        user = create_user(
+            db,
+            f"promo-{role.value.lower()}-admin-test@example.com",
+            role,
+        )
+        user_for_request = make_user_for_request(user)
+
+        # The status endpoint needs an existing promo to test
+        # authorization rather than only testing a missing record.
+        if method == "patch":
+            create_promo(db, code="ADMINTEST")
+    finally:
+        db.close()
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: user_for_request
+    )
+
+    try:
+        response = getattr(promo_client, method)(path, **kwargs)
+
+        assert response.status_code == 403
     finally:
         app.dependency_overrides.clear()

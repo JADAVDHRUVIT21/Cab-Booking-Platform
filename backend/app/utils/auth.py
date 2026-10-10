@@ -26,11 +26,18 @@ def get_current_user(
 
         user_id = payload.get("sub")
 
-        if user_id is None:
+        # JWT subject must be a positive integer represented as a string.
+        if (
+            not isinstance(user_id, str)
+            or not user_id.isdigit()
+            or int(user_id) <= 0
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication token",
             )
+
+        user_id = int(user_id)
 
     except JWTError:
         raise HTTPException(
@@ -38,11 +45,7 @@ def get_current_user(
             detail="Invalid or expired authentication token",
         )
 
-    user = (
-        db.query(User)
-        .filter(User.id == int(user_id))
-        .first()
-    )
+    user = db.query(User).filter(User.id == user_id).first()
 
     if user is None:
         raise HTTPException(
