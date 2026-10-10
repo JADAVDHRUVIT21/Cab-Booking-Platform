@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -55,9 +56,19 @@ def register(
         rating_avg=0.0,
     )
 
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email is already registered",
+        )
+    except Exception:
+        db.rollback()
+        raise
 
     return user
 
@@ -81,6 +92,18 @@ def register_driver(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email is already registered",
+        )
+
+    existing_phone = (
+        db.query(User)
+        .filter(User.phone == request.phone)
+        .first()
+    )
+
+    if existing_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Phone number is already registered",
         )
 
     existing_vehicle = (
@@ -108,9 +131,22 @@ def register_driver(
         vehicle_number=request.vehicle_number,
     )
 
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Email, phone number, or vehicle number "
+                "is already registered"
+            ),
+        )
+    except Exception:
+        db.rollback()
+        raise
 
     return user
 
@@ -186,16 +222,19 @@ def update_driver_availability(
 
     current_user.is_available = request.is_available
 
-    db.commit()
+    try:
+        db.commit()
+        db.refresh(current_user)
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "is_available": current_user.is_available,
     }
 
 
-@router.patch(
-    "/driver/location",
-)
+@router.patch("/driver/location")
 def update_driver_location(
     request: DriverLocationUpdateRequest,
     current_user: User = Depends(get_current_user),
@@ -210,7 +249,12 @@ def update_driver_location(
     current_user.current_lat = request.latitude
     current_user.current_lng = request.longitude
 
-    db.commit()
+    try:
+        db.commit()
+        db.refresh(current_user)
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "message": "Driver location updated successfully",
