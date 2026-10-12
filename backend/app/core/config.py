@@ -1,4 +1,3 @@
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,8 +6,10 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
 
+    # Database configuration
     DATABASE_URL: str
 
+    # Authentication and JWT configuration
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
@@ -26,6 +27,11 @@ class Settings(BaseSettings):
 
     # Receipt storage
     RECEIPT_DIR: str = "receipts"
+
+    # Stripe payment configuration
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+    STRIPE_CURRENCY: str = "inr"
 
     model_config = SettingsConfigDict(
         env_file=".env",
