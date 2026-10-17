@@ -1,5 +1,6 @@
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.routers.auth import router as auth_router
@@ -15,6 +16,19 @@ app = FastAPI(
     version=settings.APP_VERSION,
 )
 
+# Allow the local Vite frontend to communicate with FastAPI.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register API routers.
 app.include_router(auth_router)
 app.include_router(rides_router)
 app.include_router(websockets_router)
@@ -22,6 +36,7 @@ app.include_router(reviews_router)
 app.include_router(promo_codes_router)
 app.include_router(payments_router)
 app.include_router(payment_webhooks_router)
+
 
 @app.get("/")
 def root():

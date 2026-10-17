@@ -1,8 +1,9 @@
+
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,6 +26,15 @@ router = APIRouter(
     prefix="/api/auth",
     tags=["Authentication"],
 )
+
+
+def require_driver(current_user: User) -> None:
+    """Reject requests from accounts that are not drivers."""
+    if current_user.role.value != "driver":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only drivers can perform this action",
+        )
 
 
 @router.post(
@@ -66,9 +76,12 @@ def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email is already registered",
         )
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to register user. Please try again.",
+        )
 
     return user
 
@@ -87,7 +100,6 @@ def register_driver(
         .filter(User.email == request.email)
         .first()
     )
-
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -99,7 +111,6 @@ def register_driver(
         .filter(User.phone == request.phone)
         .first()
     )
-
     if existing_phone:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -111,7 +122,6 @@ def register_driver(
         .filter(User.vehicle_number == request.vehicle_number)
         .first()
     )
-
     if existing_vehicle:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -144,9 +154,12 @@ def register_driver(
                 "is already registered"
             ),
         )
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to register driver. Please try again.",
+        )
 
     return user
 
@@ -214,24 +227,22 @@ def update_driver_availability(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role.value != "driver":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only drivers can update availability",
-        )
-
-    current_user.is_available = request.is_available
+    require_driver(current_user)
 
     try:
+        current_user.is_available = request.is_available
         db.commit()
         db.refresh(current_user)
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update driver availability.",
+        )
 
-    return {
-        "is_available": current_user.is_available,
-    }
+    return DriverAvailabilityResponse(
+        is_available=bool(current_user.is_available),
+    )
 
 
 @router.patch("/driver/location")
@@ -240,24 +251,35 @@ def update_driver_location(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role.value != "driver":
+    require_driver(current_user)
+
+    # Reject invalid geographic coordinates.
+    if not -90 <= request.latitude <= 90:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only drivers can update location",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Latitude must be between -90 and 90.",
         )
 
-    current_user.current_lat = request.latitude
-    current_user.current_lng = request.longitude
+    if not -180 <= request.longitude <= 180:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Longitude must be between -180 and 180.",
+        )
 
     try:
+        current_user.current_lat = request.latitude
+        current_user.current_lng = request.longitude
         db.commit()
         db.refresh(current_user)
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update driver location.",
+        )
 
     return {
-        "message": "Driver location updated successfully",
+        "message": "Driver location updated successfully.",
         "latitude": current_user.current_lat,
         "longitude": current_user.current_lng,
     }
