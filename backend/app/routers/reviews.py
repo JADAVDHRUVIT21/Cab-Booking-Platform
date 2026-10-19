@@ -38,40 +38,48 @@ def create_review(
             detail="Only riders can submit reviews",
         )
 
-    ride = db.query(Ride).filter(
-        Ride.id == request.ride_id
-    ).first()
+    # Find the requested ride.
+    ride = (
+        db.query(Ride)
+        .filter(Ride.id == request.ride_id)
+        .first()
+    )
 
-    if not ride:
+    if ride is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ride not found",
         )
 
-    # A rider may review only their own completed ride.
+    # Riders can review only their own rides.
     if ride.rider_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can review only your own rides",
         )
 
+    # Only completed rides can be reviewed.
     if ride.status != RideStatus.COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only completed rides can be reviewed",
         )
 
+    # A completed ride must have an assigned driver.
     if ride.driver_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This ride has no assigned driver",
         )
 
-    existing_review = db.query(Review).filter(
-        Review.ride_id == ride.id
-    ).first()
+    # A ride can receive only one review.
+    existing_review = (
+        db.query(Review)
+        .filter(Review.ride_id == ride.id)
+        .first()
+    )
 
-    if existing_review:
+    if existing_review is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This ride has already been reviewed",
@@ -90,15 +98,17 @@ def create_review(
         db.flush()
 
         # Recalculate the driver's average rating.
-        average_rating = db.query(
-            func.avg(Review.rating)
-        ).filter(
-            Review.driver_id == ride.driver_id
-        ).scalar()
+        average_rating = (
+            db.query(func.avg(Review.rating))
+            .filter(Review.driver_id == ride.driver_id)
+            .scalar()
+        )
 
-        driver = db.query(User).filter(
-            User.id == ride.driver_id
-        ).first()
+        driver = (
+            db.query(User)
+            .filter(User.id == ride.driver_id)
+            .first()
+        )
 
         if driver is None:
             raise HTTPException(
@@ -122,6 +132,30 @@ def create_review(
 
 
 @router.get(
+    "/my",
+    response_model=list[ReviewResponse],
+)
+def get_my_reviews(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return reviews submitted by the authenticated rider."""
+
+    if current_user.role.value != "rider":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only riders can view their reviews",
+        )
+
+    return (
+        db.query(Review)
+        .filter(Review.rider_id == current_user.id)
+        .order_by(Review.created_at.desc())
+        .all()
+    )
+
+
+@router.get(
     "/drivers/{driver_id}",
     response_model=list[ReviewResponse],
 )
@@ -129,10 +163,16 @@ def get_driver_reviews(
     driver_id: int,
     db: Session = Depends(get_db),
 ):
-    driver = db.query(User).filter(
-        User.id == driver_id,
-        User.role == "driver",
-    ).first()
+    """Return reviews for a specific driver."""
+
+    driver = (
+        db.query(User)
+        .filter(
+            User.id == driver_id,
+            User.role == "driver",
+        )
+        .first()
+    )
 
     if driver is None:
         raise HTTPException(
@@ -156,10 +196,16 @@ def get_driver_rating(
     driver_id: int,
     db: Session = Depends(get_db),
 ):
-    driver = db.query(User).filter(
-        User.id == driver_id,
-        User.role == "driver",
-    ).first()
+    """Return a driver's average rating and total review count."""
+
+    driver = (
+        db.query(User)
+        .filter(
+            User.id == driver_id,
+            User.role == "driver",
+        )
+        .first()
+    )
 
     if driver is None:
         raise HTTPException(
@@ -167,9 +213,11 @@ def get_driver_rating(
             detail="Driver not found",
         )
 
-    total_reviews = db.query(Review).filter(
-        Review.driver_id == driver_id
-    ).count()
+    total_reviews = (
+        db.query(Review)
+        .filter(Review.driver_id == driver_id)
+        .count()
+    )
 
     return DriverRatingResponse(
         driver_id=driver.id,

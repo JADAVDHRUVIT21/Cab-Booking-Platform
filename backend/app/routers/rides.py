@@ -148,7 +148,6 @@ def validate_booking_promo(
     if promo.expires_at is not None:
         expiry = promo.expires_at
 
-        # PostgreSQL may return a naive datetime for some configurations.
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
 
@@ -232,7 +231,6 @@ def request_ride(
         discount_amount = 0.0
         payable_fare = original_fare
 
-        # Validate and calculate the discount on the server.
         if request.promo_code:
             promo = validate_booking_promo(
                 db=db,
@@ -300,14 +298,11 @@ def request_ride(
         )
 
         db.add(ride)
-
-        # Flush creates the ride within the transaction.
         db.flush()
 
         if nearest_driver is not None:
             nearest_driver.is_available = False
 
-        # Record the promo use in the same transaction as the ride.
         if promo is not None:
             promo.used_count += 1
 
@@ -498,10 +493,7 @@ def complete_ride(
 
         ride.status = RideStatus.COMPLETED
         ride.completed_at = datetime.now(timezone.utc)
-
-        # estimated_fare already contains the discounted payable fare.
         ride.final_fare = ride.estimated_fare
-
         current_user.is_available = True
 
         db.commit()
@@ -786,6 +778,78 @@ def get_current_rider_ride(
         .order_by(Ride.requested_at.desc(), Ride.id.desc())
         .first()
     )
+
+
+@router.get(
+    "/{ride_id}/driver-location",
+)
+def get_ride_driver_location(
+    ride_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the assigned driver's latest GPS location for this ride."""
+    ride = get_ride_or_404(db, ride_id)
+
+    is_rider_owner = (
+        current_user.role.value == "rider"
+        and ride.rider_id == current_user.id
+    )
+
+    is_assigned_driver = (
+        current_user.role.value == "driver"
+        and ride.driver_id == current_user.id
+    )
+
+    if not (is_rider_owner or is_assigned_driver):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to view this driver's location",
+        )
+
+    if ride.driver_id is None:
+        return {
+            "ride_id": ride.id,
+            "driver_id": None,
+            "latitude": None,
+            "longitude": None,
+            "available": False,
+            "message": "No driver has been assigned to this ride yet.",
+        }
+
+    driver = (
+        db.query(User)
+        .filter(User.id == ride.driver_id)
+        .first()
+    )
+
+    if driver is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assigned driver not found",
+        )
+
+    latitude = driver.current_lat
+    longitude = driver.current_lng
+
+    if latitude is None or longitude is None:
+        return {
+            "ride_id": ride.id,
+            "driver_id": driver.id,
+            "latitude": None,
+            "longitude": None,
+            "available": False,
+            "message": "The driver has not shared a GPS location yet.",
+        }
+
+    return {
+        "ride_id": ride.id,
+        "driver_id": driver.id,
+        "latitude": latitude,
+        "longitude": longitude,
+        "available": True,
+        "message": "Driver location available.",
+    }
 
 
 @router.get(
